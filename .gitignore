@@ -1,0 +1,59 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+*.log
+
+# =========================
+# Virtual Environments
+# =========================
+env/
+.venv/
+venv/
+ENV/
+env.bak/
+
+# =========================
+# macOS
+# =========================
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# =========================
+# IDE / Editors
+# =========================
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# =========================
+# Gradio / Cache
+# =========================
+.gradio/
+
+# =========================
+# Model Files (Large ONNX, Checkpoints)
+# =========================
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# =========================
+# Other Archives
+# =========================
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+*.tar.xz
