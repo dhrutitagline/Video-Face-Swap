@@ -23,34 +23,8 @@ cd Video-Face-Swap
 pip install -r requirements.txt
 ```
 
-### 3️⃣ Install FFmpeg
+### 3️⃣ Download Model Weights
 
-FFmpeg is required for video processing.
-
-🔹 macOS (Fast Binary Install)
-```bash
-curl -L https://evermeet.cx/ffmpeg/getrelease/zip -o ffmpeg.zip
-unzip ffmpeg.zip
-mv ffmpeg /usr/local/bin/
-chmod +x /usr/local/bin/ffmpeg
-```
-
-🔹 Linux
-```bash
-sudo apt update && sudo apt install ffmpeg -y
-```
-
-🔹 Windows
-
-Download from ffmpeg.org
- and add it to PATH.
-
-Verify installation:
-```bash
-ffmpeg -version
-```
-
-### 4️⃣ Download Model Weights
 #### 🔹 Local PC
 ```bash
 curl -L -o inswapper_128.onnx https://huggingface.co/xingren23/comfyflow-models/resolve/main/insightface/inswapper_128.onnx

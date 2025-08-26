@@ -6,7 +6,8 @@ opencv-python==4.12.0.88
 
 # Face & Identity
 insightface==0.7.3
+moviepy==1.0.3
 
 # ONNX Runtime (pick one depending on your hardware)
-onnxruntime==1.22.0    # For CPU users
+# onnxruntime==1.22.0    # For CPU users
 onnxruntime-gpu==1.22.0

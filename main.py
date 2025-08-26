@@ -4,8 +4,9 @@ import os
 import insightface
 from insightface.app import FaceAnalysis
 from insightface.data import get_image as ins_get_image
-
 import gradio as gr
+import datetime
+from moviepy.editor import VideoFileClip
 
 theme = gr.themes.Default(
     font=['Helvetica', 'ui-sans-serif', 'system-ui', 'sans-serif'],
@@ -24,17 +25,17 @@ def add_bbox_padding(bbox, margin=5):
         bbox[2] + margin,
         bbox[3] + margin]
 
+def point_in_box(bl, tr, p):
+   return bl[0] < p[0] < tr[0] and bl[1] < p[1] < tr[1]
 
 def select_handler(img, evt: gr.SelectData):
     if img is None:
         return None, -1
-
     faces = app.get(img)
     faces = sorted(faces, key=lambda x: x.bbox[0])
-    cropped_image = None  # must be None if no face is found
+    cropped_image = None
     face_index = -1
     sel_face_index = 0
-
     for idx, face in enumerate(faces):
         box = face.bbox.astype(np.int32)
         if point_in_box((box[0], box[1]), (box[2], box[3]), (evt.index[0], evt.index[1])):
@@ -43,13 +44,8 @@ def select_handler(img, evt: gr.SelectData):
             box = np.clip(box, 0, None)
             cropped_image = img[box[1]:box[3], box[0]:box[2]]
             sel_face_index = idx
-            break  # stop after first matching face
-
+            break
     return cropped_image, sel_face_index
-
-
-def point_in_box(bl, tr, p):
-   return bl[0] < p[0] < tr[0] and bl[1] < p[1] < tr[1]
 
 def get_faces(img):
     if img is None:
@@ -70,30 +66,18 @@ def swap_face_fct(img_source, face_index, img_swap_face):
     src_face = sorted(src_face, key=lambda x: x.bbox[0])
     return swapper.get(img_source, faces[face_index], src_face[0], paste_back=True)
 
-import subprocess
-
-def merge_audio_ffmpeg(original_video, processed_video, final_output):
-    """
-    Merge original audio into the processed (silent) video using ffmpeg.
-    """
-    command = [
-        "ffmpeg",
-        "-y",                      # overwrite output if exists
-        "-i", processed_video,     # processed video without audio
-        "-i", original_video,      # original video with audio
-        "-c:v", "copy",            # copy video stream (no re-encode)
-        "-c:a", "aac",             # encode audio in AAC (widely supported)
-        "-map", "0:v:0",           # take video from processed file
-        "-map", "1:a:0",           # take audio from original file
-        final_output
-    ]
+def merge_audio_moviepy(original_video, processed_video, final_output):
     try:
-        subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        video_clip = VideoFileClip(processed_video)
+        audio_clip = VideoFileClip(original_video).audio
+
+        final_clip = video_clip.set_audio(audio_clip)
+        final_clip.write_videofile(final_output, codec="libx264", audio_codec="aac")
+
         return final_output
     except Exception as e:
-        print("FFmpeg merge failed:", e)
-        return processed_video   # fallback: return video without audio
-
+        print("MoviePy merge failed:", e)
+        return processed_video
 
 def swap_video_fct(video_path, output_path, source_face, destination_face, tolerance, preview=-1, progress=None):
     if source_face is None or destination_face is None:
@@ -105,7 +89,6 @@ def swap_video_fct(video_path, output_path, source_face, destination_face, toler
             def __call__(self, *args, **kwargs): pass
         progress = DummyProgress()
 
-    # Precompute destination & source
     dest_face = app.get(destination_face)
     if len(dest_face) == 0:
         print("No destination face found")
@@ -119,7 +102,6 @@ def swap_video_fct(video_path, output_path, source_face, destination_face, toler
         return None
     src_face = sorted(src_face, key=lambda x: x.bbox[0])
 
-    # Open video
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         print("Could not open video")
@@ -129,19 +111,49 @@ def swap_video_fct(video_path, output_path, source_face, destination_face, toler
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 
-    # Save silent video in current working directory
-    temp_output = os.path.join(os.getcwd(), "temp_silent.mp4")
-    video_out = cv2.VideoWriter(temp_output, fourcc, fps, (width, height))
+    # ==============================
+    # Cross-platform codec selection
+    # ==============================
 
-    # Process frames
+    import platform
+
+    safe_output_dir = os.path.join(os.getcwd(), "outputs")
+    os.makedirs(safe_output_dir, exist_ok=True)
+
+    if platform.system() == "Darwin":  # macOS
+        codec_candidates = ['MJPG']   # super reliable on macOS
+        temp_output = os.path.join(safe_output_dir, "temp_silent.avi")
+    else:  # Linux/Windows
+        codec_candidates = ['mp4v', 'XVID', 'avc1']
+        temp_output = os.path.join(safe_output_dir, "temp_silent.mp4")
+
+
+    # Try codecs until one works
+    video_out = None
+    for codec in codec_candidates:
+        fourcc = cv2.VideoWriter_fourcc(*codec)
+        test_writer = cv2.VideoWriter(temp_output, fourcc, fps, (width, height))
+        if test_writer.isOpened():
+            test_writer.release()
+            video_out = cv2.VideoWriter(temp_output, fourcc, fps, (width, height))
+            print(f"Using codec: {codec}")
+            break
+        else:
+            test_writer.release()
+            print(f"Codec {codec} failed, trying next...")
+
+    if video_out is None or not video_out.isOpened():
+        raise RuntimeError(f"Failed to open VideoWriter with any codec. Tried: {codec_candidates}")
+
+    # ==============================
+    # Frame processing loop
+    # ==============================
     for i in range(frame_count if preview == -1 else 1):
         cap.set(cv2.CAP_PROP_POS_FRAMES, i if preview == -1 else preview)
         ret, frame = cap.read()
         if not ret:
             continue
-
         faces = app.get(frame)
         faces = sorted(faces, key=lambda x: x.bbox[0])
         if len(faces) > 0:
@@ -150,7 +162,6 @@ def swap_video_fct(video_path, output_path, source_face, destination_face, toler
             max_index = np.argmax(sims)
             if sims[0][max_index] * 100 >= (100 - tolerance):
                 frame = swapper.get(frame, faces[max_index], src_face[0], paste_back=True)
-
         if preview == -1:
             video_out.write(frame)
         else:
@@ -160,20 +171,28 @@ def swap_video_fct(video_path, output_path, source_face, destination_face, toler
     cap.release()
     if preview == -1:
         video_out.release()
+        print(f"Written video saved at: {temp_output}, exists={os.path.exists(temp_output)}")
 
-        # Save final output in current working directory
-        final_output = output_path if output_path else os.path.join(os.getcwd(), "final_swapped.mp4")
+        # Final file in outputs folder (or user path if provided)
+        if output_path:
+            final_output = os.path.abspath(output_path)
+        else:
+            # ⏰ Generate timestamped filename
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            final_output = os.path.join(safe_output_dir, f"final_swapped_{timestamp}.mp4")
+
         if os.path.isdir(final_output):
-            final_output = os.path.join(final_output, "final_swapped.mp4")
+            final_output = os.path.join(final_output, f"final_swapped_{timestamp}.mp4")
 
-        merge_audio_ffmpeg(video_path, temp_output, final_output)
+        # Merge audio using moviepy
+        merge_audio_moviepy(video_path, temp_output, final_output)
 
-        # cleanup silent file
         if os.path.exists(temp_output):
             os.remove(temp_output)
 
-        print(f"Final video with audio: {final_output}")
+        print(f"✅ Final video with audio: {final_output}")
         return final_output, final_output
+
 
 def analyze_video(video_path):
     cap = cv2.VideoCapture(video_path)
@@ -226,19 +245,14 @@ def create_interface():
                         download_link = gr.File(label="Download Final Video", type="filepath")
                     with gr.Column(scale=1):
                         pass
-            # Component Events
             source_video.upload(fn=analyze_video,inputs=source_video,outputs=video_info)
             video_info.change(fn=update_slider,inputs=source_video,outputs=video_position)
-            #preview_button.click(fn=show_preview,inputs=[source_video, video_position],outputs=frame_preview)
             frame_preview.select(select_handler, frame_preview, [dest_face_vid, face_index ])
             video_position.change(show_preview,inputs=[source_video, video_position],outputs=frame_preview)
             process_video.click(fn=swap_video_fct,inputs=[source_video,video_file_path,source_face_vid,dest_face_vid, face_tolerance], outputs=[output_video, download_link])
             preview_video.click(fn=swap_video_fct,inputs=[source_video,video_file_path,source_face_vid,dest_face_vid, face_tolerance, video_position], outputs=image_output)
 
     face_swap_ui.queue().launch(debug=True,share=True)
-    #face_swap_ui.launch()
-
-
 
 if __name__ == "__main__":
     app = FaceAnalysis(name='buffalo_l')
